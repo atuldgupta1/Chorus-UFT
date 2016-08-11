@@ -1,0 +1,893 @@
+Option Explicit
+
+'Global configuration variables
+Dim Central_Office : Central_Office = "HSN"
+Dim AutomationDbConnectionString : AutomationDbConnectionString = "DRIVER={MySQL ODBC 5.1 Driver};SERVER=localhost;DATABASE=b2b_automation_71327;USER=Automation;PASSWORD=B2BT3ster;OPTION=11;"
+Dim ComDbDesc_SIT : ComDbDesc_SIT = "(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=csuxnpdbs029)(PORT=1521))(CONNECT_DATA=(SERVICE_NAME=CDONBSS1)));"
+Dim ComDbUserID_SIT : ComDbUserID_SIT = "SUP-600363"
+Dim ComDbPassword_SIT : ComDbPassword_SIT = "ChangeMe06"
+Dim ComDbDesc_EMMA : ComDbDesc_EMMA = "(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=csuxnpdbs029)(PORT=1526))(CONNECT_DATA=(SERVICE_NAME=CDONBSS6)));"
+Dim ComDbUserID_EMMA : ComDbUserID_EMMA = "SUP-957381"
+Dim ComDbPassword_EMMA : ComDbPassword_EMMA = "ChangeMe04"
+
+
+
+'@Description Function to determine whether Passed TLC should be used or Query should eb used to Fetch TLC
+'@Documentation Function to determine whether Passed TLC should be used or Query should eb used to Fetch TLC
+Function SQL_Fetch_TLC(TLC,CustomerName)
+'wait(1)
+Dim strQuery,DBFlag,CustomerReference,CustomerReferenceQuery,Environment
+
+DBFlag = 0
+Environment = "SIT"
+
+Select Case TLC
+	Case "DB_CP"  
+		strQuery =  getCPQuery
+		strQuery = strQuery & " And central_office = 'HSN'"
+		DBFlag = 1
+		
+	Case "DB_Intact"
+		strQuery =  getIntactONTQuery
+		strQuery = strQuery & " And central_office = 'HSN'"
+		DBFlag = 1
+
+	Case "DB_CAO" 
+		strQuery =  getCAOQuery
+		strQuery = strQuery & " And central_office = 'HSN'"
+		DBFlag = 1
+		
+	Case "DB_CS"  
+		strQuery =  getCSQuery
+		strQuery = strQuery & " And central_office = 'HSN'"
+		DBFlag = 1
+		
+	Case "DB_MA"  
+		strQuery =  getPrimaryInstance(false)
+		CustomerReferenceQuery = getCustomerReference(CustomerName)
+		CustomerReference = DB_COM_FetchData(CustomerReferenceQuery,Environment)
+		strQuery = Replace(strQuery,"54457865",CustomerReference)
+		strQuery = strQuery & " And central_office = 'HSN'"
+		DBFlag = 1
+		
+	Case "DB_CO"  
+		strQuery =  getPrimaryInstance(false)
+		CustomerReferenceQuery = getCustomerReference(CustomerName)
+		CustomerReference = DB_COM_FetchData(CustomerReferenceQuery,Environment)
+		strQuery = Replace(strQuery,"54457865",CustomerReference)
+		strQuery = strQuery & " And central_office = 'HSN'"
+		DBFlag = 1
+		
+	Case "DB_TP"  
+		strQuery =  getPrimaryInstance(true)
+		CustomerReferenceQuery = getCustomerReference(CustomerName)
+		CustomerReference = DB_COM_FetchData(CustomerReferenceQuery,Environment)
+		strQuery = Replace(strQuery,"customer_ref =","customer_ref !=")
+		strQuery = Replace(strQuery,"54457865",CustomerReference)
+		strQuery = strQuery & " And central_office = 'TPO'"
+		DBFlag = 1
+		
+	'Case "DB_TS"  strQuery =  getTSQuery
+	Case "DB_DP"  
+		strQuery =  getPrimaryInstance(false)
+		CustomerReferenceQuery = getCustomerReference(CustomerName)
+		CustomerReference = DB_COM_FetchData(CustomerReferenceQuery,Environment)
+		strQuery = Replace(strQuery,"54457865",CustomerReference)
+		strQuery = strQuery & " And central_office = 'HSN'"
+		DBFlag = 1
+		
+	Case "DB_DS"  
+		strQuery =  getSecondaryInstance
+		CustomerReferenceQuery = getCustomerReference(CustomerName)
+		CustomerReference = DB_COM_FetchData(CustomerReferenceQuery,Environment)
+		strQuery = Replace(strQuery,"54457865",CustomerReference)
+		strQuery = strQuery & " And central_office = 'HSN'"
+		DBFlag = 1
+		
+	Case "Connected_Pri" 
+		TLC = ReadFromDatabase_Portal_Automation_Test_Data_TLC("Primary_TLC")
+		
+	Case "Connected_Sec" 
+		TLC = ReadFromDatabase_Portal_Automation_Test_Data_TLC("Secondary_TLC")
+		
+	Case Else 
+		TLC = TLC
+End Select
+
+If DBFlag = 1 Then
+	TLC = DB_COM_FetchData(strQuery,Environment)
+	Reporter.ReportEvent micDone, "TLC", "TLC retrieved from database: " & TLC
+End If
+
+SQL_Fetch_TLC = TLC
+
+End Function
+
+
+'@Description Connect Primary Query - SIT environment
+'@Documentation Connect Primary Query - SIT environment
+Function getCPQuery()
+
+'To avoid SOM data issues that are difficult to query/predict, we maintain a list of known "good" cabinet IDs we can use to get TLCs from.
+Datatable.Importsheet "[QualityCenter\Resources] Resources\BPT Resources\Data\Environment_Data_SIT",  "SOM_Working_Cabinets" , dtLocalSheet 
+Dim Rowcount : Rowcount= DataTable.GetSheet(dtLocalSheet).GetRowCount
+'Build a string containing the list of working cabinet IDs, to use in the SQL query
+Dim CabinetsString : CabinetsString = "'"
+Dim i, CabinetId
+For i =1 To Rowcount
+
+	CabinetId = DataTable("CabinetID",dtLocalSheet)
+	CabinetsString = CabinetsString & CabinetID
+	If i < Rowcount Then
+		CabinetsString = CabinetsString & "','"
+	Else
+		CabinetsString = CabinetsString & "'"
+	End If
+	DataTable.setnextrow   
+		
+Next
+
+Dim strQuery
+strQuery = "select NAOWN.NADBGE_2.tlc from NAOWN.NADBGE_2@NADB,LocationDB.Address_Search@ALM AS1  " &_ 
+"where " &_ 
+"not exists (select null from PRDINV.product_instance pi " &_ 
+"    where SUBSTR(pi.LOCATION_REF_A,1,1)='1' and PI.LOCATION_REF_A = NAOWN.NADBGE_2.TLC) " &_ 
+"and  " &_ 
+"NOT EXISTS (select NULL from OM.order_product_instance opi " &_ 
+"join OM.product_order po on po.id =  opi.product_order_id " &_ 
+"join OM.customer_order_item_location coil on coil.customer_order_item_id = po.customer_order_item_id " &_ 
+"join OM.customer_order_item coi on coil.customer_order_item_id = coi.id " &_ 
+"join OM.Customer_order co on co.id = coi.Customer_order_id " &_ 
+"WHERE coil.location_ref = to_char( NAOWN.NADBGE_2.TLC) " &_ 
+"AND co.customer_order_state_substt_id not in (32,34,35,36,37,2,3,4,5,6,7,8,9,10,11,12)) " &_ 
+"AND AVAILABILITY_STATUS = 'Ready' " &_ 
+"AND DISPLAY_INSTALL_TYPE like 'Standard Install%%' " &_ 
+"AND CONSENT_REQUIRED = 'N' " &_ 
+"AND DESIGN_REQUIRED = 'N' " &_ 
+"AND BUILD_REQUIRED = 'N' " &_ 
+"AND ZONE_TYPE = 'UFB' "&_
+"AND AS1.TLC = NAOWN.NADBGE_2.tlc " &_
+"AND CENTRAL_OFFICE = 'HSN' " &_
+"AND NAOWN.NADBGE_2.FINAL_CABINET_ID IN (" & CabinetsString & ") " &_
+"ORDER BY DBMS_RANDOM.VALUE "
+'"AND ROWNUM <= 1 "
+
+getCPQuery = strQuery
+
+End Function
+
+Function getIntactONTQuery()
+
+Dim strQuery
+strQuery = "select NAOWN.NADBGE_2.tlc from NAOWN.NADBGE_2@NADB  " &_ 
+"where NAOWN.NADBGE_2.tlc in  " & _
+"(select  distinct pi.location_ref_A from prdinv.product_instance pi,Prdinv.product_instance_chr pic " & _
+"where pi.end_date is not null " & _
+"and pi.id = pic.product_instance_id " & _
+"and pic.value like 'ONT%' " & _
+"and not exists (Select * from prdinv.product_instance pi1 where pi.location_ref_a = pi1.location_ref_A and pi1.End_Date is null) " & _
+"and not exists (select NULL from OM.order_product_instance opi " & _
+"                join OM.product_order po on po.id =  opi.product_order_id " & _
+"                join OM.customer_order_item_location coil on coil.customer_order_item_id = po.customer_order_item_id " & _
+"                join OM.customer_order_item coi on coil.customer_order_item_id = coi.id " & _
+"                join OM.Customer_order co on co.id = coi.Customer_order_id " & _
+"                WHERE coil.location_ref = pi.location_ref_A " & _
+"                AND co.customer_order_state_substt_id not in (32,34,35,36,37,2,3,4,5,6,7,8,9,10,11,12))) " & _
+"AND AVAILABILITY_STATUS = 'Ready' " & _
+"AND CONSENT_REQUIRED = 'N' " & _
+"AND DESIGN_REQUIRED = 'N' " & _
+"AND BUILD_REQUIRED = 'N' " & _
+"AND ZONE_TYPE = 'UFB' " & _
+"AND CENTRAL_OFFICE = 'HSN' " &_
+"AND ROWNUM <= 1"
+
+getIntactONTQuery = strQuery
+
+End Function
+
+'@Description Connect Additional ONT Query 
+'@Documentation Connect Additional ONT  Query
+Function getCAOQuery()
+
+Dim strQuery
+strQuery = "select NAOWN.NADBGE_2.tlc from NAOWN.NADBGE_2@NADB  " &_ 
+"where NAOWN.NADBGE_2.tlc in " &_ 
+"(select  distinct pi.location_ref_A from prdinv.product_instance pi,Prdinv.product_instance_chr pic,prdcat.product_offer po " &_ 
+"where pi.end_date is null " &_ 
+"and pi.id = pic.product_instance_id " &_ 
+"and pic.value like 'ONT%' " &_ 
+"and po.id = pi.product_offer_id " &_ 
+"and po.offer_type = 'Primary' " &_ 
+"and exists  (select * from om.order_product_instance opi  " &_ 
+"                  join OM.product_order po on opi.product_order_id = po.id " &_ 
+"                  join om.customer_order_item coi on po.customer_order_item_id = coi.id " &_ 
+"                  join om.customer_order co on coi.customer_order_id = co.id " &_ 
+"                  where opi.ext_product_instance_id_ref = pi.external_ref " &_ 
+"                  And co.customer_order_state_substt_id not in (0,1,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,36,37)) " &_ 
+"and NOT EXISTS  (select null from OM.product_order po " &_ 
+"                  join om.customer_order_item coi on po.customer_order_item_id = coi.id " &_ 
+"                  join om.customer_order co on coi.customer_order_id = co.id " &_ 
+"                  where pi.id = po.product_instance_id " &_ 
+"                  And co.customer_order_state_substt_id not in (32,34,35,36,37,2,3,4,5,6,7,8,9,10,11,12)) " &_ 
+"and Not Exists (select * from om.customer_order co, om.customer_order_item coi, om.customer_order_item_location coil " &_ 
+"                where co.id = coi.customer_order_id " &_ 
+"                and coi.id = coil.customer_order_item_id " &_ 
+"                and coil.location_ref = to_char(pi.location_ref_A) " &_ 
+"                and co.customer_order_state_substt_id in (0,1,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,36,37)) " &_ 
+"group by pi.location_ref_A " &_
+"having count(*) = 1) " &_
+"AND AVAILABILITY_STATUS = 'Ready' " &_ 
+"AND CONSENT_REQUIRED = 'N' " &_ 
+"AND DESIGN_REQUIRED = 'N' " &_ 
+"AND BUILD_REQUIRED = 'N' " &_ 
+"AND ZONE_TYPE = 'UFB' " &_ 
+"AND CENTRAL_OFFICE = 'HSN' " &_
+"AND ROWNUM <= 1 "
+
+getCAOQuery = strQuery
+
+End Function
+
+'@Description Connect Secondary Query 
+'@Documentation Connect Secondary Query
+Function getCSQuery()
+
+Dim strQuery
+
+strQuery = "select NAOWN.NADBGE_2.tlc from NAOWN.NADBGE_2@NADB  "&_
+"where NAOWN.NADBGE_2.tlc in "&_
+"(select  distinct pi.location_ref_A from prdinv.product_instance pi,Prdinv.product_instance_chr pic,prdcat.product_offer po "&_
+"where pi.end_date is null "&_
+"and pi.id = pic.product_instance_id "&_
+"and pic.value like 'ONT%' "&_
+"and po.id = pi.product_offer_id "&_
+"and po.offer_type = 'Primary' "&_
+"and exists  (select * from om.order_product_instance opi  "&_
+"                  join OM.product_order po on opi.product_order_id = po.id "&_
+"                  join om.customer_order_item coi on po.customer_order_item_id = coi.id "&_
+"                  join om.customer_order co on coi.customer_order_id = co.id "&_
+"                  where opi.ext_product_instance_id_ref = pi.external_ref "&_
+"                  And co.customer_order_state_substt_id not in (0,1,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,36,37)) "&_
+"and not exists(select  distinct pi1.location_ref_A from prdinv.product_instance pi1,product_offer po1 "&_
+"where pi1.end_date is null "&_
+"and po1.id = pi1.product_offer_id "&_
+"and po1.offer_type = 'Secondary' "&_
+"and pi1.location_ref_A = pi.location_ref_A) "&_
+"and NOT EXISTS  (select null from OM.product_order po "&_
+"                  join om.customer_order_item coi on po.customer_order_item_id = coi.id "&_
+"                  join om.customer_order co on coi.customer_order_id = co.id "&_
+"                  where pi.id = po.product_instance_id "&_
+"                  And co.customer_order_state_substt_id not in (32,34,35,36,37,2,3,4,5,6,7,8,9,10,11,12)) "&_
+"and Not Exists (select * from om.customer_order co, om.customer_order_item coi, om.customer_order_item_location coil "&_
+"                where co.id = coi.customer_order_id "&_
+"                and coi.id = coil.customer_order_item_id "&_
+"                and coil.location_ref = to_char(pi.location_ref_A) "&_
+"                and co.customer_order_state_substt_id in (0,1,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,36,37))) "&_
+"AND AVAILABILITY_STATUS = 'Ready' "&_
+"AND CONSENT_REQUIRED = 'N' "&_
+"AND DESIGN_REQUIRED = 'N' "&_
+"AND BUILD_REQUIRED = 'N' "&_
+"AND ZONE_TYPE = 'UFB' " &_ 
+"AND CENTRAL_OFFICE = 'HSN' " &_
+"AND ROWNUM <= 1 "	
+
+getCSQuery = strQuery
+
+End Function
+
+'@Description Query to Fetch existing primary Instance Location
+'@Documentation Query to Fetch existing primary Instance Location
+Function getPrimaryInstance(OtherRSP)
+
+Dim strQuery, CustomerClause
+
+If (OtherRSP = true) Then
+	CustomerClause = "and pi.customer_ref <> 54457865 "
+Else
+	CustomerClause = "and pi.customer_ref = 54457865 "
+End If
+
+strQuery = "select NAOWN.NADBGE_2.tlc from NAOWN.NADBGE_2@NADB  "&_
+"where NAOWN.NADBGE_2.tlc in "&_
+"(select  distinct pi.location_ref_A from prdinv.product_instance pi,Prdinv.product_instance_chr pic,prdcat.product_offer po "&_
+"where pi.end_date is null "&_
+"and pi.id = pic.product_instance_id "&_
+"and pic.value like 'ONT%' "&_
+"and po.id = pi.product_offer_id "&_
+"and po.offer_type = 'Primary' "&_
+CustomerClause &_
+"and exists  (select * from om.order_product_instance opi  "&_
+"                  join OM.product_order po on opi.product_order_id = po.id "&_
+"                  join om.customer_order_item coi on po.customer_order_item_id = coi.id "&_
+"                  join om.customer_order co on coi.customer_order_id = co.id "&_
+"                  where opi.ext_product_instance_id_ref = pi.external_ref "&_
+"                  And co.customer_order_state_substt_id not in (0,1,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,36,37)) "&_
+"and NOT EXISTS  (select null from OM.product_order po "&_
+"                  join om.customer_order_item coi on po.customer_order_item_id = coi.id "&_
+"                  join om.customer_order co on coi.customer_order_id = co.id "&_
+"                  where pi.id = po.product_instance_id "&_
+"                  And co.customer_order_state_substt_id not in (32,34,35,36,37,2,3,4,5,6,7,8,9,10,11,12)) "&_
+"and Not Exists (select * from om.customer_order co, om.customer_order_item coi, om.customer_order_item_location coil "&_
+"                where co.id = coi.customer_order_id "&_
+"                and coi.id = coil.customer_order_item_id "&_
+"                and coil.location_ref = to_char(pi.location_ref_A) "&_
+"                and co.customer_order_state_substt_id in (0,1,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,36,37))) "&_
+"AND AVAILABILITY_STATUS = 'Ready' "&_
+"AND CONSENT_REQUIRED = 'N' "&_
+"AND DESIGN_REQUIRED = 'N' "&_
+"AND BUILD_REQUIRED = 'N' "&_
+"AND ZONE_TYPE = 'UFB' " &_ 
+"AND CENTRAL_OFFICE = 'HSN' " &_
+"AND ROWNUM <= 1 "
+
+getPrimaryInstance = strQuery
+End Function
+
+'@Description Query to Fetch existing Secondary Instance Location
+'@Documentation Query to Fetch existing Secondary Instance Location
+Function getSecondaryInstance()
+
+Dim strQuery
+
+strQuery = "select NAOWN.NADBGE_2.tlc from NAOWN.NADBGE_2@NADB  "&_
+"where NAOWN.NADBGE_2.tlc in "&_
+"(select  distinct pi.location_ref_A from prdinv.product_instance pi,Prdinv.product_instance_chr pic,prdcat.product_offer po "&_
+"where pi.end_date is null "&_
+"and pi.id = pic.product_instance_id "&_
+"and pic.value like 'ONT%' "&_
+"and po.id = pi.product_offer_id "&_
+"and po.offer_type = 'Primary' "&_
+"and pi.customer_ref = 54457865  "&_
+"and exists  (select * from om.order_product_instance opi  "&_
+"                  join OM.product_order po on opi.product_order_id = po.id "&_
+"                  join om.customer_order_item coi on po.customer_order_item_id = coi.id "&_
+"                  join om.customer_order co on coi.customer_order_id = co.id "&_
+"                  where opi.ext_product_instance_id_ref = pi.external_ref "&_
+"                  And co.customer_order_state_substt_id not in (0,1,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,36,37)) "&_
+"and Exists (select  distinct pi1.location_ref_A from prdinv.product_instance pi1,product_offer po1 "&_
+"                       where pi1.end_date is null "&_
+"                      and po1.id = pi1.product_offer_id "&_
+"                     and po1.offer_type = 'Secondary' "&_
+"                     and pi1.location_ref_A = pi.location_ref_A) "&_
+"and NOT EXISTS  (select null from OM.product_order po "&_
+"                  join om.customer_order_item coi on po.customer_order_item_id = coi.id "&_
+"                  join om.customer_order co on coi.customer_order_id = co.id "&_
+"                  where pi.id = po.product_instance_id "&_
+"                  And co.customer_order_state_substt_id not in (32,34,35,36,37,2,3,4,5,6,7,8,9,10,11,12)) "&_
+"and Not Exists (select * from om.customer_order co, om.customer_order_item coi, om.customer_order_item_location coil "&_
+"                where co.id = coi.customer_order_id "&_
+"                and coi.id = coil.customer_order_item_id "&_
+"                and coil.location_ref = to_char(pi.location_ref_A) "&_
+"                and co.customer_order_state_substt_id in (0,1,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,36,37))) "&_
+"AND AVAILABILITY_STATUS = 'Ready' "&_
+"AND CONSENT_REQUIRED = 'N' "&_
+"AND DESIGN_REQUIRED = 'N' "&_
+"AND BUILD_REQUIRED = 'N' "&_
+"AND ZONE_TYPE = 'UFB' " &_ 
+"AND CENTRAL_OFFICE = 'HSN' " &_
+"AND ROWNUM <= 1 "
+
+getSecondaryInstance = strQuery
+
+End Function
+
+'@Description Query to Fetch Customer Reference Number
+'@Documentation Query to Fetch Customer Reference Number
+Function getCustomerReference(CustomerName)
+
+Dim strQuery
+
+strQuery = "select Customer_Ref from cmown.customer_manager cm "&_
+"where Upper(customer_name) like Upper('%" & CustomerName & "%')"
+
+getCustomerReference = strQuery
+End Function
+
+
+
+'@Description Temporary DB to store Connect Primary Location. Would be called only after connect Order
+'@Documentation Temporary DB to store Connect Primary Location. Would be called only after connect Order
+Function WriteToDatabase_Portal_Automation_Test_Data_TLC(TLC,Column_Name)
+
+Dim oCn,Sql
+
+If TLC = "" Then
+	Reporter.ReportEvent micFail, "TLC value is blank","TLC Value is Blank. Not Updating the DB Portal_Automation_Test_Data_TLC"
+Else
+	Set oCn = CreateObject("ADODB.Connection")
+	oCn.open(AutomationDbConnectionString)    'Open your connection
+
+	Sql= "UPDATE Portal_Automation_Test_Data_TLC SET "&Column_Name&" = " &TLC
+	oCN.Execute sql
+	Reporter.ReportEvent micPass, "TLC Updated in DB","TLC Value update is Test DB Portal_Automation_Test_Data_TLC"
+End If
+
+End Function
+
+
+'@Description Temporary DB to store Connect Primary Location. Would be called if order needs to be placed on priviously connected Instance
+'@Documentation Temporary DB to store Connect Primary Location. Would be called if order needs to be placed on priviously connected Instance
+Function ReadFromDatabase_Portal_Automation_Test_Data_TLC(Column_Name)
+
+Dim oCn,Sql,rs,a
+Set oCn = CreateObject("ADODB.Connection")
+oCn.open(AutomationDbConnectionString)    'Open your connection
+
+Sql= "SELECT "&Column_Name&" FROM Portal_Automation_Test_Data_TLC"
+
+Set rs = CreateObject("ADODB.Recordset")
+rs.open Sql,oCn,3,3
+
+if rs.EOF then
+  Reporter.ReportEvent micFail,"Database Status","Database Portal Automation Test Data is empty.Please verify if Connect Order was successful"
+else
+	Do while NOT rs.EOF
+		a=rs.Fields(0).Value
+        rs.MoveNext
+	Loop
+end if
+
+ReadFromDatabase_Portal_Automation_Test_Data_TLC = a
+
+End Function
+
+'@Description Executes a query against the COM database and returns a single value
+'@Documentation Executes a query against the COM database and returns a single value
+Function DB_COM_FetchData(strSQLQuery,Environment)
+
+Reporter.ReportEvent micDone, "Executing SQL Query", strSQLQuery
+
+Dim strDBDesc,strUserID,strPassword,Conn,strConnection,rs,a
+
+If (Environment = "EMMA SIT") Then
+	strDBDesc = ComDbDesc_EMMA
+	strUserID = ComDbUserID_EMMA
+	strPassword = ComDbPassword_EMMA
+ElseIf (Environment = "SIT") Then
+	strDBDesc = ComDbDesc_SIT
+	strUserID = ComDbUserID_SIT
+	strPassword = ComDbPassword_SIT
+End If
+
+strConnection = "Provider=OraOLEDB.Oracle;Data Source=" & strDBDesc & _
+";User ID=" & strUserID & ";Password=" & strPassword & ";"
+ 
+set Conn=CreateObject("ADODB.Connection") 
+Conn.open strConnection 
+Set rs = CreateObject("ADODB.Recordset")
+rs.open strSQLQuery,Conn,3,3
+
+if rs.EOF then
+	Reporter.ReportEvent micFail,"Rows Fetched","0 Rows were fetched" 
+else
+	'Do while NOT rs.EOF
+	 a=rs.Fields(0).Value
+    ''msgbox a
+    'rs.MoveNext
+	'Loop
+end if
+
+DB_COM_FetchData = a
+
+End Function
+
+
+' RJ has created this to insert The TLC into database
+'***********************************************************************************************
+'@Description Function to determine whether Passed TLC should be used or Query should be used to Fetch TLC
+'@Documentation Function to determine whether Passed TLC should be used or Query should be used to Fetch TLC
+Function B2B_SQL_Fetch_TLC(TLC,CustomerName,Exchange,Environment)
+
+' If CustomerName is not provided, select the value from the DataTable Resources
+If CustomerName = "" Then
+	Datatable.Importsheet "[QualityCenter\Resources] Resources\BPT Resources\Data\Environment_Data_SIT",  "B2B_RSP" , dtLocalSheet 
+	DataTable.SetCurrentRow(1)
+	CustomerName = trim(DataTable.Value("B2B_RSP_To_be_used_for_Extracting_TLC",dtLocalSheet))
+End If
+
+' If Exchange is not provided, select the value from the DataTable Resources
+If Exchange = "" Then
+	Datatable.Importsheet "[QualityCenter\Resources] Resources\BPT Resources\Data\Environment_Data_SIT",  "B2B_RSP" , dtLocalSheet 
+	DataTable.SetCurrentRow(1)
+	Exchange = trim(DataTable.Value("B2B_RSP_Exchange_Detail",dtLocalSheet))
+End If
+
+'If Environment is not provided, assume SIT
+If Environment = "" Then
+	Environment = "SIT"
+End If
+
+Reporter.ReportEvent micDone, "Query Parameters", "TLC or Query code: " & TLC & "<br>Customer Name: " & CustomerName & "<br>Exchange: " & Exchange & "<br>Environment: " & Environment
+
+'wait(1)
+Dim strQuery,DBFlag,CustomerReference,CustomerReferenceQuery
+
+DBFlag = 0
+
+Select Case TLC
+	Case "DB_CP"  'Connect Primary
+		strQuery =  getCPQuery
+		strQuery = Replace(strQuery,"HSN",Exchange)
+		DBFlag = 1
+		
+	Case "DB_Intact" ' Connect Primary - Intact
+		strQuery =  getIntactONTQuery
+		strQuery = Replace(strQuery,"HSN",Exchange)
+		DBFlag = 1
+		
+	Case "DB_CAO" 
+		strQuery =  getCAOQuery 'Connect Additional ONT
+		strQuery = Replace(strQuery,"HSN",Exchange)
+		DBFlag = 1
+		
+	Case "DB_CS"  
+		strQuery =  getCSQuery 'Connect Secondary
+		strQuery = Replace(strQuery,"HSN",Exchange)
+		DBFlag = 1
+		
+	Case "DB_MA"  'Modify Attribute
+		strQuery =  getPrimaryInstance(false)
+		CustomerReferenceQuery = getCustomerReference(CustomerName)
+		CustomerReference = DB_COM_FetchData(CustomerReferenceQuery,Environment)
+		strQuery = Replace(strQuery,"54457865",CustomerReference)
+		strQuery = Replace(strQuery,"HSN",Exchange)
+		DBFlag = 1
+		
+	Case "DB_CO"  'Change Offer
+		strQuery =  getPrimaryInstance(false)
+		CustomerReferenceQuery = getCustomerReference(CustomerName)
+		CustomerReference = DB_COM_FetchData(CustomerReferenceQuery,Environment)
+		strQuery = Replace(strQuery,"54457865",CustomerReference)
+		strQuery = Replace(strQuery,"HSN",Exchange)
+		DBFlag = 1
+		
+	Case "DB_TP"  'Transfer Primary
+		strQuery =  getPrimaryInstance(true)
+		CustomerReferenceQuery = getCustomerReference(CustomerName)
+		CustomerReference = DB_COM_FetchData(CustomerReferenceQuery,Environment)
+		strQuery = Replace(strQuery,"54457865",CustomerReference)
+		strQuery = Replace(strQuery,"HSN",Exchange)
+		DBFlag = 1
+		
+	'Case "DB_TS"  strQuery =  getTSQuery
+	Case "DB_DP"  'Disconnect Primary
+		strQuery =  getPrimaryInstance(false)
+		CustomerReferenceQuery = getCustomerReference(CustomerName)
+		CustomerReference = DB_COM_FetchData(CustomerReferenceQuery,Environment)
+		strQuery = Replace(strQuery,"54457865",CustomerReference)
+		strQuery = Replace(strQuery,"HSN",Exchange)
+		DBFlag = 1
+		
+	Case "DB_DS"  'Disconnect Secondary
+		strQuery =  getSecondaryInstance
+		CustomerReferenceQuery = getCustomerReference(CustomerName)
+		CustomerReference = DB_COM_FetchData(CustomerReferenceQuery,Environment)
+		strQuery = Replace(strQuery,"54457865",CustomerReference)
+		strQuery = Replace(strQuery,"HSN",Exchange)
+		DBFlag = 1
+		
+	Case "Connected_Pri" 
+		TLC = ReadFromDatabase_Portal_Automation_Test_Data_TLC("Primary_TLC")
+		
+	Case "Connected_Sec" 
+		TLC = ReadFromDatabase_Portal_Automation_Test_Data_TLC("Secondary_TLC")
+		
+	Case ""
+		Reporter.ReportEvent micFail, "TLC Retrieval", "No database query code or TLC was specified"
+		
+	Case Else 
+		TLC = TLC
+		Reporter.ReportEvent micDone, "TLC Retrieval", "Using specified TLC: " & TLC
+End Select
+
+If DBFlag = 1 Then
+	TLC =DB_COM_FetchData(strQuery,Environment)
+	Reporter.ReportEvent micDone, "TLC", "TLC retrieved from database: " & TLC
+End If
+
+'Call writeToExcel(TLC,1,1)
+B2B_SQL_Fetch_TLC = TLC
+
+End Function
+
+
+'Description Function to Fetch associated Disconnect Order Number of the Replace Order
+'Documentation Function to Fetch Associated Disconnect Order Number of the Replace Order
+
+Function getAssociatedDisconnectOrderQuery(OrderID)
+
+Dim strQuery
+
+strQuery = "SELECT co.ext_Customer_Order_Id_Ref from om.customer_order_item coi,om.customer_Order co "&_
+"WHERE coi.product_instance_id = "&_
+"(SELECT coi1.Replace_Product_instance_id from om.customer_order_item coi1,om.customer_order co1 "&_
+"WHERE co1.id = coi1.customer_order_id "&_
+"AND coi1.Order_type like '%Replace%' "&_
+"AND co1.ext_customer_order_id_ref = "&OrderID&") "&_
+"AND co.customer_order_state_substt_id in (0,1,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,36,37) "&_
+"And Co.id = coi.customer_order_id"
+
+getAssociatedDisconnectOrderQuery = strQuery
+
+End Function
+
+'@Description Function to find the Primary product ID at a location
+'Documentation Function to find the Primary product ID at a locationtance 
+
+Function getPrimaryProductInstanceQuery(TLC)
+
+Dim strSQLQuery
+
+strSQLQuery = "SELECT pi.External_Ref FROM prdinv.product_instance pi,prdcat.Product_Offer po "&_
+"WHERE pi.End_Date is null "&_
+"AND  po.id = pi.product_offer_id "&_
+"and po.offer_type = 'Primary' "&_
+"AND pi.location_ref_a = '" & TLC & "'"
+
+getPrimaryProductInstanceQuery = strSQLQuery
+
+End Function
+
+'@Description Function to get the customer (RSP) name for the selected product instance
+'@Documentation Function to get the customer (RSP) name for the selected product instance
+Function getLSPQuery(ProductInstance)
+	
+Dim StrQuery,Customer_Name
+
+StrQuery = "select cm.customer_name from cmown.customer_manager cm,prdinv.product_instance pi "&_
+"where pi.External_ref = '"&ProductInstance& "'"&_
+"And cm.customer_ref = pi.customer_ref "
+
+Customer_Name = DB_COM_FetchData(strQuery)
+
+getLSP = Customer_Name
+
+End Function
+
+'@Description  Inserts test data into the Automation Database so it can be retrieved by another tool (e.g. SoapUI)
+'@Documentation Inserts test data into the Automation Database so it can be retrieved by another tool (e.g. SoapUI)
+Function B2B_Insert_Data_Into_Automation_Database(TLC)
+' If required add Test Suite With QCUTIL Object
+
+'Make Database Connection with MYSQL Database
+Dim oCn,ConnectionString,Sql,RecordsAffected
+Set oCn = CreateObject("ADODB.Connection")
+oCn.open(AutomationDbConnectionString)    'Open your connection
+
+Dim testSuite: testSuite = qcutil.CurrentTestSet.Name
+Dim testCase : testCase = qcutil.CurrentTest.Name
+' Check Which Parameters need to be updated
+If len(TLC) > 8 Then
+	' Update Query
+     Sql= "UPDATE datainputs SET TLC = "+ CStr(TLC) +" WHERE TESTCASENAME = '"+trim(testCase)+"' AND TESTSUITENAME = '"+trim(testSuite)+"'"
+     oCN.Execute Sql, RecordsAffected 'Insert the field
+     If (RecordsAffected > 0) Then    
+     	Reporter.ReportEvent micDone, "Write to Automation Database", "Updated " & RecordsAffected & " row(s) in the test automation database."
+     Else
+     	Reporter.ReportEvent micFail, "Write to Automation Database", "Updated 0 row(s) in the test automation database. Please check that the test suite and test case names match in ALM, the automation database and the SoapUI project."
+     End If
+End If
+
+oCn.close()
+'Close all connections
+
+B2B_Insert_Data_Into_Automation_Database = TLC
+
+End Function
+
+'@Description  Inserts Order ID and TLC into the shared Automation database
+'@Documentation Inserts Order ID and TLC into the shared Automation database
+Function B2B_Agnostic_Test_Case_Insert_Parameters_Into_Database(Test_Suite,Order_ID,TLC_ID)
+'Make Database Connection with MYSQL Database
+Dim oCn,ConnectionString,Sql,RecordsAffected
+Set oCn = CreateObject("ADODB.Connection")
+oCn.open(AutomationDbConnectionString)    'Open your connection
+
+Dim sGetCurrentTestScriptName: sGetCurrentTestScriptName = qcutil.CurrentTest.Name
+Dim Test_Case : Test_Case = sGetCurrentTestScriptName
+' Check Which Parameters need to be updated
+If len(TLC_ID) > 8 Then
+	' Update Query
+     Sql= "UPDATE datainputs SET TLC = '"+TLC_ID +"' WHERE TESTCASENAME = '"+trim(Test_Case)+"'"
+     oCN.Execute Sql, RecordsAffected 'Insert the field
+     If (RecordsAffected > 0) Then    
+     	Reporter.ReportEvent micDone, "Write to Automation Database", "Updated " & RecordsAffected & " row(s) in the test automation database."
+     Else
+     	Reporter.ReportEvent micFail, "Write to Automation Database", "Updated 0 row(s) in the test automation database. Please check that the test suite and test case names match in ALM, the automation database and the SoapUI project."
+     End If
+End If
+
+If len(Order_ID) > 8 Then
+	' Update Query
+     Sql= "UPDATE datainputs SET OrderNo = '"+Order_ID +"' WHERE TESTCASENAME = '"+trim(Test_Case)+"'"
+     oCN.Execute Sql, RecordsAffected 'Insert the field
+     If (RecordsAffected > 0) Then    
+     	Reporter.ReportEvent micDone, "Write to Automation Database", "Updated " & RecordsAffected & " row(s) in the test automation database."
+     Else
+     	Reporter.ReportEvent micFail, "Write to Automation Database", "Updated 0 row(s) in the test automation database. Please check that the test suite and test case names match in ALM, the automation database and the SoapUI project."
+     End If
+End If
+
+
+oCn.close()
+'Close all connections
+
+
+End Function
+
+'@Description Get the Order Number from Database
+'@Documentation Get the Order Number from Database
+Function B2B_Agnostic_Test_Case_Get_TLC_and_Order_Number_From_Database()
+
+Dim sGetCurrentTestScriptName: sGetCurrentTestScriptName = qcutil.CurrentTest.Name
+Dim Test_Case : Test_Case = sGetCurrentTestScriptName
+
+Dim oCn,ConnectionString,Sql, rs
+Dim OrderNumber,TLC
+Set oCn = CreateObject("ADODB.Connection")
+sql = "SELECT TLC,OrderNo FROM datainputs WHERE TESTCASENAME = '"+trim(Test_Case) +"'"
+
+ConnectionString = "DRIVER={MySQL ODBC 5.1 Driver};SERVER=localhost;DATABASE=b2b_automation_71327;USER=root;PASSWORD=;OPTION=11;"
+oCn.open(ConnectionString)    'Open your connection
+
+
+Set rs = CreateObject("ADODB.Recordset")
+rs.open Sql,oCn,3,3
+
+
+		TLC=rs.Fields(0).Value
+		OrderNumber = rs.Fields(1).Value
+
+B2B_Agnostic_Test_Case_Get_TLC_and_Order_Number_From_Database = "TLC-"&TLC&"OrderNumber-"&OrderNumber
+
+
+oCn.close()
+
+
+End Function
+
+
+'@Description Get the Order Number from String returned from Database
+'@Documentation Get the Order Number from String returned from Database
+Function ExtractOrderNumberfromString(PassedString)
+	Dim OrderNumber
+    OrderNumber	= mid(PassedString,instr(PassedString,"OrderNumber-")+len("OrderNumber-"),len(PassedString)-1)
+    
+    ExtractOrderNumberfromString = OrderNumber
+End Function
+
+'@Description Get the TLC from String returned from Database
+'@Documentation Get the TLC from String returned from Database
+Function ExtractTLCfromString(PassedString)
+
+	Dim TLC
+	TLC =  mid(PassedString,instr(PassedString,"TLC-")+len("TLC-"),instr(PassedString,"OrderNumber-")-1-len("TLC-"))
+	ExtractTLCfromString = TLC
+End Function
+
+'Description : SQL Query to Fetch Associated CSE Offers
+'Documentation : SQL Query to Fetch Associated CSE Offers
+
+Function getCSEQuery()
+
+Dim strSQLQuery
+
+strSQLQuery = "select po.generic_name from prdcat.product_offer po where " &_
+"po.id in "&_
+"(select cpo1.product_offer_id from prdcat.customer_product_offer cpo1 "&_
+"where cpo1.id in "&_ 
+"(Select por.CHILD_CUST_PROD_OFFER_ID from prdcat.product_offer_Relationship por "&_
+"where por.PARENT_CUST_PROD_OFFER_ID = "&_ 
+"(select cpo.id from prdcat.customer_product_Offer cpo "&_
+"where cpo.customer_ref = 54765460 "&_
+"and cpo.product_offer_id = 253) "&_
+"And Upper(ORDER_AIM) = Upper('Modify') "&_
+"And por.relationship_type = 'CSE' "&_
+"And por.is_default = 1) "&_
+"and cpo1.Is_CSE = 'Y' "&_
+"and cpo1.B2B_Enabled = 'Y')"
+
+getCSEQuery = strSQLQuery
+
+End Function
+
+
+' No need of description as this will not be called from business component
+Function Get_Order_Number_With_Status_Substatus_StrQuery(Order_Type,Order_Status,Order_Substatus,RSPName,CSEPresent)
+Dim strSQLQuery
+
+strSQLQuery = "select co.ext_customer_order_id_ref " &_
+	"from OM.customer_order CO, OM.Customer_order_state_substate COSS, CMOWN.customer_manager CM, OM.customer_order_item COI, OM.product_order POR, PRDCAT.product_offer POF " &_
+	"where UPPER(CO.order_type) = Upper('"&Order_Type&"')  " &_
+	"and CO.customer_order_state_substt_id =COSS.ID  " &_
+	"and UPPER(COSS.State) = Upper('"&Order_Status&"')  " &_
+	"and UPPER(COSS.SubState) = Upper('"&Order_Substatus&"')  " &_
+	"and co.order_date > Sysdate - 200  " &_
+	"and CO.customer_ref = CM.Customer_ref  " &_
+	"and Upper(CM.Customer_name) = Upper('"&RSPName&"') " &_
+	"and co.id = coi.customer_order_id " &_
+	"and coi.id = por.customer_order_item_id " &_
+	"and pof.id = por.product_offer_id " &_
+	"and pof.product_family_id = 1 " 'Query Order is only valid for orders for Bitstream product offers
+
+If Instr(1,LCase(CSEPresent),"y",1) <> 0 Then
+	'Additional clauses to check For CSE order item
+	strSQLQuery = strSQLQuery &_
+	"and CO.ext_Customer_Order_Id_Ref in  " &_
+	"(  " &_
+	"  Select ext_Customer_Order_Id_Ref from customer_order   " &_
+	"  where id in  " &_
+	"  (  " &_
+	"    select Coi.customer_order_id from om.customer_order co,Customer_order_item coi  " &_
+	"    where co.id = coi.customer_order_id  " &_
+	"    Group by Coi.customer_order_id  " &_
+	"    having count(*) = 2  " &_
+	"  )  " &_
+	") "	
+End If
+
+Get_Order_Number_With_Status_Substatus_StrQuery = strSQLQuery
+
+End Function
+
+
+'@Description Get Order with passed Status, SubStatus, RSPName, OrderType
+'@Documentation Get Order with passed Status, SubStatus, RSPName, OrderType
+Function Get_Order_Number_With_Status_Substatus(Order_Type,Order_Status,Order_Substatus,RSPName,Environment,CSEPresent)
+
+	Environment = "SIT"
+	Dim Query 
+	Query =  Get_Order_Number_With_Status_Substatus_StrQuery(Order_Type,Order_Status,Order_Substatus,RSPName,CSEPresent)
+	
+	Get_Order_Number_With_Status_Substatus = trim(DB_COM_FetchData(Query,Environment))
+	
+End Function
+
+'@Description Returns a TLC needed for Connect Primary Test Cases where specific NADB criteria are required
+'@Documentation Returns a TLC needed for Connect Primary Test Cases where specific NADB criteria are required
+Function Get_TLC_For_Feasibility(AVAILABILITY_STATUS,CONSENT_REQUIRED,DESIGN_REQUIRED,BUILD_REQUIRED,ZONE_TYPE,GREENFIELD,EXCHANGE,Environment)
+
+	'If Environment is not provided, assume SIT
+	If Environment = "" Then
+		Environment = "SIT"
+	End If
+	
+	Dim Query 
+	Query = SQL_Query_For_Order_Feasibility(AVAILABILITY_STATUS,CONSENT_REQUIRED,DESIGN_REQUIRED,BUILD_REQUIRED,ZONE_TYPE,GREENFIELD,EXCHANGE)
+	
+	Get_TLC_For_Feasibility = trim(DB_COM_FetchData(Query,Environment))
+	
+End Function
+
+' this wont be called directly from a business component
+Function SQL_Query_For_Order_Feasibility(AVAILABILITY_STATUS,CONSENT_REQUIRED,DESIGN_REQUIRED,BUILD_REQUIRED,ZONE_TYPE,GREENFIELD,EXCHANGE)
+
+Dim strQuery
+strQuery = "select NAOWN.NADBGE_2.tlc from NAOWN.NADBGE_2@NADB,LocationDB.Address_Search@ALM AS1  " &_ 
+"where " &_ 
+"not exists (select null from PRDINV.product_instance pi " &_ 
+"    where SUBSTR(pi.LOCATION_REF_A,1,1)='1' and PI.LOCATION_REF_A = NAOWN.NADBGE_2.TLC) " &_ 
+"and  " &_ 
+"NOT EXISTS (select NULL from OM.order_product_instance opi " &_ 
+"join OM.product_order po on po.id =  opi.product_order_id " &_ 
+"join OM.customer_order_item_location coil on coil.customer_order_item_id = po.customer_order_item_id " &_ 
+"join OM.customer_order_item coi on coil.customer_order_item_id = coi.id " &_ 
+"join OM.Customer_order co on co.id = coi.Customer_order_id " &_ 
+"WHERE coil.location_ref = to_char( NAOWN.NADBGE_2.TLC) " &_ 
+"AND co.customer_order_state_substt_id not in (32,34,35,36,37,2,3,4,5,6,7,8,9,10,11,12)) " &_ 
+"AND AVAILABILITY_STATUS = '"&AVAILABILITY_STATUS&"' " &_ 
+"AND INSTALL_TYPE like 'Standard Install%%' " &_ 
+"AND CONSENT_REQUIRED = '"&CONSENT_REQUIRED&"' " &_ 
+"AND DESIGN_REQUIRED = '"&DESIGN_REQUIRED&"' " &_ 
+"AND BUILD_REQUIRED = '"&BUILD_REQUIRED&"' " &_ 
+"AND ZONE_TYPE = '"&ZONE_TYPE&"' "&_
+"AND GREENFIELD = '"&GREENFIELD&"' "&_
+"AND CENTRAL_OFFICE = '"&EXCHANGE&"' "&_
+"AND AS1.TLC = NAOWN.NADBGE_2.tlc " &_
+"AND ROWNUM <= 1 "
+
+SQL_Query_For_Order_Feasibility = strQuery
+
+End Function
+	
+	
